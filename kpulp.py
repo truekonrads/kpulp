@@ -9,54 +9,126 @@ import win32evtlog
 import win32api
 import win32con
 import pywintypes
-
+import os
 OUTPUT_FORMATS = "json".split(" ")
 LANGID = win32api.MAKELANGID(win32con.LANG_NEUTRAL, win32con.SUBLANG_NEUTRAL)
 DLLCACHE = {}
+DLLMSGCACHE = {}
+LOGGER = logging.getLogger("kpulp")
+LOGGER.setLevel(logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 
-def getLogDlls(sourceName, logType):
-    cachekey = logType + "/" + sourceName
-    if cachekey not in DLLCACHE:
+def loadDLLsInCache(directory=None):
 
-        keyName = u'SYSTEM\\CurrentControlSet\\Services\\EventLog\\{}\\{}'.format(
-            logType, sourceName)
-        logging.debug("Opening key {}".format(keyName))
-        handle = win32api.RegOpenKey(win32con.HKEY_LOCAL_MACHINE, keyName)
-        dllNames = win32api.RegQueryValueEx(
-            handle, "EventMessageFile")[0].split(";")
-        DLLCACHE[cachekey] = []
-        for dllName in dllNames:
-            dllHandle = loadDLL(dllName)
-            DLLCACHE[cachekey].append(dllHandle)
+    if directory:
 
-    return DLLCACHE[cachekey]
+        for source in os.listdir(directory):
+            dirpath = os.path.join(directory, source)
+            if os.path.isdir(dirpath):
+                for e in os.listdir(dirpath):
+
+                    if e.lower().endswith(".dll"):
+                        # dllHandle = loadDLL(dllName)
+                        dllPath = os.path.join(dirpath, e)
+                        LOGGER.debug(
+                            "Loading {} for {}".format(dllPath, source))
+                        if source not in DLLCACHE:
+                            DLLCACHE[source] = {}
+                        try:
+                            dllHandle = loadDLL(dllPath)
+                            DLLCACHE[source][e] = dllHandle
+                        except pywintypes.error, exc:
+                            LOGGER.warn(
+                                "Error loading {}: {}".format(dllPath, e))
+        return
+        from IPython import embed
+        embed()
+
+    keyName = u'SYSTEM\\CurrentControlSet\\Services\\EventLog'
+    h1 = win32api.RegOpenKey(win32con.HKEY_LOCAL_MACHINE, keyName)
+
+    for (typeName, _, __, ___) in win32api.RegEnumKeyEx(h1):
+        keyName = u'SYSTEM\\CurrentControlSet\\Services\\EventLog\\{}'.format(
+            typeName)
+        h2 = win32api.RegOpenKey(win32con.HKEY_LOCAL_MACHINE, keyName)
+        for (sourceName, _, __, ___) in win32api.RegEnumKeyEx(h2):
+            keyName = u'SYSTEM\\CurrentControlSet\\Services\\EventLog\\{}\\{}'.format(
+                typeName, sourceName)
+            h3 = win32api.RegOpenKeyEx(
+                win32con.HKEY_LOCAL_MACHINE, keyName, 0, win32con.KEY_READ)
+            LOGGER.debug("Enumerating {}".format(keyName))
+            try:
+
+                dllNames = win32api.RegQueryValueEx(
+                    h3, "EventMessageFile")[0].split(";")
+                if sourceName not in DLLCACHE:
+                    DLLCACHE[sourceName] = {}
+                for dllName in dllNames:
+                    if dllName:
+                        dllHandle = loadDLL(dllName)
+                        DLLCACHE[sourceName][dllName] = dllHandle
+            except pywintypes.error, e:
+                if e.args[0] == 2:  # value not found
+                    pass
+                else:
+                    raise e
 
 
 def loadDLL(dllName):
 
     dllPath = win32api.ExpandEnvironmentStrings(dllName)
-    logging.warn("Loading library {}".format(dllPath))
+    LOGGER.debug("Loading library {}".format(dllPath))
     dllHandle = win32api.LoadLibraryEx(
         dllPath, 0, win32con.LOAD_LIBRARY_AS_DATAFILE)
     return dllHandle
 
 
-def expandString(event, logType="Security"):
-    try:
-        candidateDlls = getLogDlls(event.SourceName, logType)
+def expandString(event):
 
-        for dllHandle in candidateDlls:
+    cachekey = event.SourceName + "/" + str(event.EventID)
+    try:
+        if cachekey in DLLMSGCACHE:
+            dllName = DLLMSGCACHE[cachekey]
+            if dllName is None:
+                return ""
             try:
-                data = win32api.FormatMessageW(win32con.FORMAT_MESSAGE_FROM_HMODULE,
-                                               dllHandle, event.EventID, LANGID, event.StringInserts)
-                return data
-            except win32api.error:
-                pass  # not in this DLL
+                dllHandle = DLLCACHE[event.SourceName][dllName]
+            except KeyError:
+                from IPython import embed
+                embed()
+            data = win32api.FormatMessageW(win32con.FORMAT_MESSAGE_FROM_HMODULE,
+                                           dllHandle, event.EventID, LANGID, event.StringInserts)
+            return data
+        elif event.SourceName not in DLLCACHE:
+            LOGGER.warn("Event source not in cache".format(
+                event.SourceName, event.EventID))
+            DLLMSGCACHE[cachekey] = None
+
+        else:
+
+            for (dllName, dllHandle) in DLLCACHE[event.SourceName].items():
+                try:
+                    data = win32api.FormatMessageW(win32con.FORMAT_MESSAGE_FROM_HMODULE,
+                                                   dllHandle, event.EventID, LANGID, event.StringInserts)
+
+                    DLLMSGCACHE[cachekey] = dllName
+                    return data
+                except win32api.error:
+                    pass  # not in this DLL
+                except SystemError, e:
+                    pass
+                    # print str(e)
+                    # from IPython import embed
+                    # embed()
     except pywintypes.error:
         pass
-    logging.debug("Unable to expand data for {} {}".format(
+    LOGGER.warn("Unable to expand data for {} EventID: {}".format(
         event.SourceName, event.EventID))
+    DLLMSGCACHE[cachekey] = None  # no DLLs known to expand this message
+    # from IPython import embed
+    # embed()
     return ""
 
 
@@ -64,17 +136,17 @@ def readevents(path):
     logHandle = win32evtlog.OpenBackupEventLog("localhost", path)
     flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
     total = win32evtlog.GetNumberOfEventLogRecords(logHandle)
-    logging.debug("Total number of records for {} is: {}".format(path, total))
+    LOGGER.info("Total number of records for {} is: {}".format(path, total))
 
-    if "security" in path.lower():
-        logType = "Security"
-    elif "application" in path.lower():
-        logType = "Application"
-    elif "system" in path.lower():
-        logType = "System"
-    else:
-        logging.error("Unknown log type - put something in path")
-        sys.exit(-1)
+    # if "security" in path.lower():
+    #     logType = "Security"
+    # elif "application" in path.lower():
+    #     logType = "Application"
+    # elif "system" in path.lower():
+    #     logType = "System"
+    # else:
+    #     LOGGER.error("Unknown log type - put something in path")
+    #     sys.exit(-1)
     event_dict = None
     while True:
         events = win32evtlog.ReadEventLog(logHandle, flags, 0)
@@ -91,13 +163,12 @@ def readevents(path):
                 if event.StringInserts:
                     event_dict['data'] = "|".join(event.StringInserts)
 
-                description = expandString(event, logType)
+                description = expandString(event)
+                event_dict['Description'] = description
                 if description:
                     event_dict.update(description_to_fields(description))
                     first_line = description.split("\r\n")[0]
                     event_dict['Short Description'] = first_line
-
-                event_dict['Description'] = description
                 yield event_dict
         else:
             break
@@ -145,7 +216,7 @@ def description_to_fields(description):
             else:
                 new_key = k
             if new_key in event_dict:
-                logging.warn(
+                LOGGER.warn(
                     "Key {} already in dict with value: {} ({})".format(
                         new_key, event_dict[new_key]))
             event_dict[new_key] = v
@@ -161,26 +232,32 @@ def main():
     parser.add_argument('--output-format', "-f", type=str, dest="format", choices=OUTPUT_FORMATS,
                         default="json",
                         help='Output format, choices are:' + ",".join(OUTPUT_FORMATS))
+    parser.add_argument('--additional-dlls', type=str, dest="extradllpath",
+                        help='Directory with additoinal DLLs to load (as created by dllraider)')
+    parser.add_argument('--debug', "-d", action="store_true",
+                        help='Debug level messages')
     args = parser.parse_args()
 
-    if args.format == "csv":
-        raise NotImplementedError
+    if args.debug:
+        LOGGER.setLevel(logging.DEBUG)
+
     if args.output == "-":
         output = sys.stdout
     else:
         output = open(args.output, "wb")
-
+    loadDLLsInCache(args.extradllpath)
     all_logs = [item for sublist in [
         glob.glob(k) for k in args.logfiles] for item in sublist]
 
     for lf in all_logs:
-        logging.warn("Processing {}".format(lf))
+        logging.info("Processing {}".format(lf))
 
         for record in readevents(lf):
 
             if args.format == "json":
                 txt = json.dumps(record) + "\r\n"
                 output.write(txt)
+                LOGGER.debug(txt)
 
 
 if __name__ == '__main__':
