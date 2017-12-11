@@ -148,6 +148,7 @@ def readevents(path):
     #     LOGGER.error("Unknown log type - put something in path")
     #     sys.exit(-1)
     event_dict = None
+    
     while True:
         events = win32evtlog.ReadEventLog(logHandle, flags, 0)
         if events:
@@ -250,14 +251,16 @@ def main():
         glob.glob(k) for k in args.logfiles] for item in sublist]
 
     for lf in all_logs:
-        logging.info("Processing {}".format(lf))
+        LOGGER.info("Processing {}".format(lf))
+        try:
+            for record in readevents(lf):
 
-        for record in readevents(lf):
-
-            if args.format == "json":
-                txt = json.dumps(record) + "\r\n"
-                output.write(txt)
-                LOGGER.debug(txt)
+                if args.format == "json":
+                    txt = json.dumps(record) + "\r\n"
+                    output.write(txt)
+                    LOGGER.debug(txt)
+        except pywintypes.error,e:
+            LOGGER.error(str(e))
 
 
 if __name__ == '__main__':
