@@ -133,7 +133,7 @@ def expandString(event):
 
 
 def readevents(path):
-    logHandle = win32evtlog.OpenBackupEventLog("localhost", path)
+    logHandle = win32evtlog.OpenBackupEventLog(None, path) # None=NULL means local host
     flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
     total = win32evtlog.GetNumberOfEventLogRecords(logHandle)
     LOGGER.info("Total number of records for {} is: {}".format(path, total))
