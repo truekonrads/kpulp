@@ -14,6 +14,8 @@ import bunch
 import evtx
 from datetime import datetime
 from lxml import etree
+import tzlocal 
+import pytz
 OUTPUT_FORMATS = "json".split(" ")
 LANGID = win32api.MAKELANGID(win32con.LANG_NEUTRAL, win32con.SUBLANG_NEUTRAL)
 DLLCACHE = {}
@@ -153,7 +155,7 @@ def readevents(path):
         #     LOGGER.error("Unknown log type - put something in path")
         #     sys.exit(-1)
         event_dict = None
-        
+        local_tz=tzlocal.get_localzone()
         while True:
             events = win32evtlog.ReadEventLog(logHandle, flags, 0)
             if events:
@@ -163,7 +165,8 @@ def readevents(path):
                     # from IPython import embed
                     # embed()
                     # event_dict['TimeGenerated'] = event.TimeGenerated.strftime("%#c")
-                    event_dict['TimeGenerated'] = event.TimeGenerated.isoformat()
+                    dt=local_tz.localize(event.TimeGenerated).astimezone(pytz.utc)
+                    event_dict['TimeGenerated'] = dt.isoformat()
                     event_dict['SourceName'] = event.SourceName
                     # See https://social.msdn.microsoft.com/Forums/sqlserver/en-US/67e49b0b-a9b8-4263-9233-079776f4cbbc/systemdiagnosticseventlogentry-is-showing-wrong-eventid-in-the-eventlogentrymessage-string-?forum=vbgeneral
                     # EventID might be Instance ID and so we 0xFFFF it to bring back to EventID
@@ -340,7 +343,7 @@ def main():
 
                 if args.format == "json":
                     txt = json.dumps(record)
-                    output.write(txt)
+                    output.write(txt+"\n")
                     LOGGER.debug(txt)
         except pywintypes.error as e:
             LOGGER.error(str(e))
