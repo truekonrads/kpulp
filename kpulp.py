@@ -10,6 +10,10 @@ import win32api
 import win32con
 import pywintypes
 import os
+import bunch
+import evtx
+from datetime import datetime
+from lxml import etree
 OUTPUT_FORMATS = "json".split(" ")
 LANGID = win32api.MAKELANGID(win32con.LANG_NEUTRAL, win32con.SUBLANG_NEUTRAL)
 DLLCACHE = {}
@@ -39,12 +43,10 @@ def loadDLLsInCache(directory=None):
                         try:
                             dllHandle = loadDLL(dllPath)
                             DLLCACHE[source][e] = dllHandle
-                        except pywintypes.error, exc:
+                        except pywintypes.error as exc:
                             LOGGER.warn(
-                                "Error loading {}: {}".format(dllPath, e))
+                                "Error loading {}: {}".format(dllPath, exc))
         return
-        from IPython import embed
-        embed()
 
     keyName = u'SYSTEM\\CurrentControlSet\\Services\\EventLog'
     h1 = win32api.RegOpenKey(win32con.HKEY_LOCAL_MACHINE, keyName)
@@ -69,7 +71,7 @@ def loadDLLsInCache(directory=None):
                     if dllName:
                         dllHandle = loadDLL(dllName)
                         DLLCACHE[sourceName][dllName] = dllHandle
-            except pywintypes.error, e:
+            except pywintypes.error as e:
                 if e.args[0] == 2:  # value not found
                     pass
                 else:
@@ -102,7 +104,7 @@ def expandString(event):
                                            dllHandle, event.EventID, LANGID, event.StringInserts)
             return data
         elif event.SourceName not in DLLCACHE:
-            LOGGER.warn("Event source not in cache".format(
+            LOGGER.debug("Event {}/{} not in cache".format(
                 event.SourceName, event.EventID))
             DLLMSGCACHE[cachekey] = None
 
@@ -117,14 +119,14 @@ def expandString(event):
                     return data
                 except win32api.error:
                     pass  # not in this DLL
-                except SystemError, e:
+                except SystemError as e:
                     pass
                     # print str(e)
                     # from IPython import embed
                     # embed()
     except pywintypes.error:
         pass
-    LOGGER.warn("Unable to expand data for {} EventID: {}".format(
+    LOGGER.debug("Unable to expand data for {} EventID: {}".format(
         event.SourceName, event.EventID))
     DLLMSGCACHE[cachekey] = None  # no DLLs known to expand this message
     # from IPython import embed
@@ -133,47 +135,120 @@ def expandString(event):
 
 
 def readevents(path):
-    logHandle = win32evtlog.OpenBackupEventLog(None, path) # None=NULL means local host
-    flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
-    total = win32evtlog.GetNumberOfEventLogRecords(logHandle)
-    LOGGER.info("Total number of records for {} is: {}".format(path, total))
+    logHandle=None
+    try:
+        logHandle = win32evtlog.OpenBackupEventLog(None, path) # None=NULL means local host
+   
+        flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
+        total = win32evtlog.GetNumberOfEventLogRecords(logHandle)
+        LOGGER.info("Total number of records for {} is: {}".format(path, total))
 
-    # if "security" in path.lower():
-    #     logType = "Security"
-    # elif "application" in path.lower():
-    #     logType = "Application"
-    # elif "system" in path.lower():
-    #     logType = "System"
-    # else:
-    #     LOGGER.error("Unknown log type - put something in path")
-    #     sys.exit(-1)
-    event_dict = None
-    
-    while True:
-        events = win32evtlog.ReadEventLog(logHandle, flags, 0)
-        if events:
-            for event in events:
-                event_dict = {}
-                event_dict['TimeGenerated'] = time.strftime(
-                    "%#c", time.localtime(int(event.TimeGenerated)))
-                event_dict['SourceName'] = event.SourceName
-                event_dict['Id'] = event.EventID
-                event_dict['EventType'] = event.EventType
-                event_dict['ComputerName'] = event.ComputerName
+        # if "security" in path.lower():
+        #     logType = "Security"
+        # elif "application" in path.lower():
+        #     logType = "Application"
+        # elif "system" in path.lower():
+        #     logType = "System"
+        # else:
+        #     LOGGER.error("Unknown log type - put something in path")
+        #     sys.exit(-1)
+        event_dict = None
+        
+        while True:
+            events = win32evtlog.ReadEventLog(logHandle, flags, 0)
+            if events:
+                for event in events:
+                    event_dict = {}
+                    # print(event.TimeGenerated)
+                    # from IPython import embed
+                    # embed()
+                    # event_dict['TimeGenerated'] = event.TimeGenerated.strftime("%#c")
+                    event_dict['TimeGenerated'] = event.TimeGenerated.isoformat()
+                    event_dict['SourceName'] = event.SourceName
+                    # See https://social.msdn.microsoft.com/Forums/sqlserver/en-US/67e49b0b-a9b8-4263-9233-079776f4cbbc/systemdiagnosticseventlogentry-is-showing-wrong-eventid-in-the-eventlogentrymessage-string-?forum=vbgeneral
+                    # EventID might be Instance ID and so we 0xFFFF it to bring back to EventID
+                    event_dict['Id'] = event.EventID & 0xFFFF
+                    event_dict['EventType'] = event.EventType
+                    event_dict['ComputerName'] = event.ComputerName
 
-                if event.StringInserts:
-                    event_dict['data'] = "|".join(event.StringInserts)
+                    if event.StringInserts:
+                        event_dict['data'] = "|".join(event.StringInserts)
 
-                description = expandString(event)
-                event_dict['Description'] = description
-                if description:
-                    event_dict.update(description_to_fields(description))
-                    first_line = description.split("\r\n")[0]
-                    event_dict['Short Description'] = first_line
-                yield event_dict
-        else:
-            break
+                    description = expandString(event)
+                    event_dict['Description'] = description
+                    if description:
+                        event_dict.update(description_to_fields(description))
+                        first_line = description.split("\r\n")[0]
+                        event_dict['Short Description'] = first_line
+                    yield event_dict
+            else:
+                break
+    except pywintypes.error as e:
+            LOGGER.error(str(e))
+            if e.winerror==1722:
+                LOGGER.error("Check that Windows Event Log service is running")
+    finally:
+        # if logHandle is not None:
+            # win32api.CloseHandle(logHandle)
+        pass
+    return
 
+def readeventsXML(path):
+    parser = evtx.PyEvtxParser(path)
+    for event in parser:
+        event_dict={
+                    'TimeGenerated': 
+                    datetime.strptime(event['timestamp'],"%Y-%m-%d %H:%M:%S.%f %Z").isoformat()
+        }
+        ns={'e':'http://schemas.microsoft.com/win/2004/08/events/event'}
+        et=etree.fromstring(event['data'].encode('utf8'))
+        system=et.find("e:System",ns)
+        event_dict['SourceName']=system.find("e:Provider",ns).attrib['Name']
+        event_dict['Id']=int(system.find("e:EventID",ns).text)
+        event_dict['EventType']=system.find("e:Level",ns).text
+        event_dict['ComputerName']=system.find("e:Computer",ns).text
+        stringInserts=[]
+        eventdata=et.find("e:EventData",ns)
+        event_dict['EventData']={}
+        if eventdata is not None:
+            for elem in eventdata.findall("e:Data",ns):
+                try:
+                    k=elem.attrib['Name']
+                except KeyError:
+                    #print(event['data'])
+                    k='Data'
+                    # An anomalous message, we're probably not handling it well
+                    #raise Exception("Eeek!")            
+                v=elem.text
+                if v is None:
+                    v=''
+                stringInserts.append(v)
+                event_dict['EventData'][k]=v
+        else: #Handle UserData and such
+            # See https://eventlogxp.com/blog/the-fastest-way-to-filter-events-by-description/
+            eventdata=et[1]
+            for e in eventdata.iter():
+                if len(e.getchildren())==0:
+                    tag=e.tag.split("}")[1]
+                    if e.text is None:
+                        val=''
+                    else:
+                        val=e.text
+                    stringInserts.append(val)
+                    event_dict['EventData'][tag]=val         
+        b=bunch.Bunch()
+        b.SourceName=event_dict['SourceName']
+        
+        b.StringInserts=tuple(stringInserts)
+        b.EventID=event_dict['Id']
+        event_dict['data']=stringInserts
+        description = expandString(b)
+        event_dict['Description'] = description
+        if description:
+            event_dict.update(description_to_fields(description))
+            first_line = description.split("\r\n")[0]
+            event_dict['Short Description'] = first_line
+        yield event_dict
 
 def description_to_fields(description):
     event_dict = {}
@@ -201,7 +276,7 @@ def description_to_fields(description):
         # is we will prefix the first one with "Subject" and 2nd one with Account For Which....
         #
 
-        m = re.match("^([A-Za-z ]+):\s*$", l)
+        m = re.match(r"^([A-Za-z ]+):\s*$", l)
         if m:  # we've hit a prefix like "Subject:"
             prefix = m.group(1)
             continue
@@ -209,7 +284,7 @@ def description_to_fields(description):
             prefix = ''
             continue
 
-        m = re.match("^\t*([A-Za-z ]+):\t{1,}(.+)", l)
+        m = re.match(r"^\t*([A-Za-z ]+):\t{1,}(.+)", l)
         if m:
             (k, v) = m.groups()
             if prefix:
@@ -218,7 +293,7 @@ def description_to_fields(description):
                 new_key = k
             if new_key in event_dict:
                 LOGGER.warn(
-                    "Key {} already in dict with value: {} ({})".format(
+                    "Key {} already in dict with value: {}".format(
                         new_key, event_dict[new_key]))
             event_dict[new_key] = v
     return event_dict
@@ -237,6 +312,9 @@ def main():
                         help='Directory with additoinal DLLs to load (as created by dllraider)')
     parser.add_argument('--debug', "-d", action="store_true",
                         help='Debug level messages')
+    parser.add_argument('--mode',help="Parsing mode: xml or native",choices=["xml","native"],
+                        default="native")
+    
     args = parser.parse_args()
 
     if args.debug:
@@ -245,21 +323,26 @@ def main():
     if args.output == "-":
         output = sys.stdout
     else:
-        output = open(args.output, "wb")
+        output = open(args.output, "w")
     loadDLLsInCache(args.extradllpath)
     all_logs = [item for sublist in [
         glob.glob(k) for k in args.logfiles] for item in sublist]
 
+    if args.mode=="native":
+        parsefunc=readevents
+    elif args.mode=="xml":
+        parsefunc=readeventsXML
+
     for lf in all_logs:
         LOGGER.info("Processing {}".format(lf))
         try:
-            for record in readevents(lf):
+            for record in parsefunc(lf):
 
                 if args.format == "json":
-                    txt = json.dumps(record) + "\r\n"
+                    txt = json.dumps(record)
                     output.write(txt)
                     LOGGER.debug(txt)
-        except pywintypes.error,e:
+        except pywintypes.error as e:
             LOGGER.error(str(e))
 
 

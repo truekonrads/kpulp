@@ -1,0 +1,4 @@
+bunch
+pyevtx-rs
+pywin32
+lxml
