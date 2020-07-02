@@ -14,7 +14,7 @@ import bunch
 import evtx
 from datetime import datetime
 from lxml import etree
-import tzlocal 
+import tzlocal
 import pytz
 OUTPUT_FORMATS = "json".split(" ")
 LANGID = win32api.MAKELANGID(win32con.LANG_NEUTRAL, win32con.SUBLANG_NEUTRAL)
@@ -97,11 +97,8 @@ def expandString(event):
             dllName = DLLMSGCACHE[cachekey]
             if dllName is None:
                 return ""
-            try:
-                dllHandle = DLLCACHE[event.SourceName][dllName]
-            except KeyError:
-                from IPython import embed
-                embed()
+
+            dllHandle = DLLCACHE[event.SourceName][dllName]
             data = win32api.FormatMessageW(win32con.FORMAT_MESSAGE_FROM_HMODULE,
                                            dllHandle, event.EventID, LANGID, event.StringInserts)
             return data
@@ -121,11 +118,8 @@ def expandString(event):
                     return data
                 except win32api.error:
                     pass  # not in this DLL
-                except SystemError as e:
+                except SystemError:
                     pass
-                    # print str(e)
-                    # from IPython import embed
-                    # embed()
     except pywintypes.error:
         pass
     LOGGER.debug("Unable to expand data for {} EventID: {}".format(
@@ -137,10 +131,11 @@ def expandString(event):
 
 
 def readevents(path):
-    logHandle=None
+    logHandle = None
     try:
-        logHandle = win32evtlog.OpenBackupEventLog(None, path) # None=NULL means local host
-   
+        logHandle = win32evtlog.OpenBackupEventLog(
+            None, path)  # None=NULL means local host
+
         flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
         total = win32evtlog.GetNumberOfEventLogRecords(logHandle)
         LOGGER.info("Total number of records for {} is: {}".format(path, total))
@@ -155,7 +150,7 @@ def readevents(path):
         #     LOGGER.error("Unknown log type - put something in path")
         #     sys.exit(-1)
         event_dict = None
-        local_tz=tzlocal.get_localzone()
+        local_tz = tzlocal.get_localzone()
         while True:
             events = win32evtlog.ReadEventLog(logHandle, flags, 0)
             if events:
@@ -165,7 +160,8 @@ def readevents(path):
                     # from IPython import embed
                     # embed()
                     # event_dict['TimeGenerated'] = event.TimeGenerated.strftime("%#c")
-                    dt=local_tz.localize(event.TimeGenerated).astimezone(pytz.utc)
+                    dt = local_tz.localize(
+                        event.TimeGenerated).astimezone(pytz.utc)
                     event_dict['TimeGenerated'] = dt.isoformat()
                     event_dict['SourceName'] = event.SourceName
                     # See https://social.msdn.microsoft.com/Forums/sqlserver/en-US/67e49b0b-a9b8-4263-9233-079776f4cbbc/systemdiagnosticseventlogentry-is-showing-wrong-eventid-in-the-eventlogentrymessage-string-?forum=vbgeneral
@@ -187,64 +183,66 @@ def readevents(path):
             else:
                 break
     except pywintypes.error as e:
-            LOGGER.error(str(e))
-            if e.winerror==1722:
-                LOGGER.error("Check that Windows Event Log service is running")
+        LOGGER.error(str(e))
+        if e.winerror == 1722:
+            LOGGER.error("Check that Windows Event Log service is running")
     finally:
         # if logHandle is not None:
-            # win32api.CloseHandle(logHandle)
+        # win32api.CloseHandle(logHandle)
         pass
     return
+
 
 def readeventsXML(path):
     parser = evtx.PyEvtxParser(path)
     for event in parser:
-        event_dict={
-                    'TimeGenerated': 
-                    datetime.strptime(event['timestamp'],"%Y-%m-%d %H:%M:%S.%f %Z").isoformat()
+        event_dict = {
+            'TimeGenerated':
+            datetime.strptime(
+                event['timestamp'], "%Y-%m-%d %H:%M:%S.%f %Z").isoformat()
         }
-        ns={'e':'http://schemas.microsoft.com/win/2004/08/events/event'}
-        et=etree.fromstring(event['data'].encode('utf8'))
-        system=et.find("e:System",ns)
-        event_dict['SourceName']=system.find("e:Provider",ns).attrib['Name']
-        event_dict['Id']=int(system.find("e:EventID",ns).text)
-        event_dict['EventType']=system.find("e:Level",ns).text
-        event_dict['ComputerName']=system.find("e:Computer",ns).text
-        stringInserts=[]
-        eventdata=et.find("e:EventData",ns)
-        event_dict['EventData']={}
+        ns = {'e': 'http://schemas.microsoft.com/win/2004/08/events/event'}
+        et = etree.fromstring(event['data'].encode('utf8'))
+        system = et.find("e:System", ns)
+        event_dict['SourceName'] = system.find("e:Provider", ns).attrib['Name']
+        event_dict['Id'] = int(system.find("e:EventID", ns).text)
+        event_dict['EventType'] = system.find("e:Level", ns).text
+        event_dict['ComputerName'] = system.find("e:Computer", ns).text
+        stringInserts = []
+        eventdata = et.find("e:EventData", ns)
+        event_dict['EventData'] = {}
         if eventdata is not None:
-            for elem in eventdata.findall("e:Data",ns):
+            for elem in eventdata.findall("e:Data", ns):
                 try:
-                    k=elem.attrib['Name']
+                    k = elem.attrib['Name']
                 except KeyError:
-                    #print(event['data'])
-                    k='Data'
+                    # print(event['data'])
+                    k = 'Data'
                     # An anomalous message, we're probably not handling it well
-                    #raise Exception("Eeek!")            
-                v=elem.text
+                    #raise Exception("Eeek!")
+                v = elem.text
                 if v is None:
-                    v=''
+                    v = ''
                 stringInserts.append(v)
-                event_dict['EventData'][k]=v
-        else: #Handle UserData and such
+                event_dict['EventData'][k] = v
+        else:  # Handle UserData and such
             # See https://eventlogxp.com/blog/the-fastest-way-to-filter-events-by-description/
-            eventdata=et[1]
+            eventdata = et[1]
             for e in eventdata.iter():
-                if len(e.getchildren())==0:
-                    tag=e.tag.split("}")[1]
+                if len(e.getchildren()) == 0:
+                    tag = e.tag.split("}")[1]
                     if e.text is None:
-                        val=''
+                        val = ''
                     else:
-                        val=e.text
+                        val = e.text
                     stringInserts.append(val)
-                    event_dict['EventData'][tag]=val         
-        b=bunch.Bunch()
-        b.SourceName=event_dict['SourceName']
-        
-        b.StringInserts=tuple(stringInserts)
-        b.EventID=event_dict['Id']
-        event_dict['data']=stringInserts
+                    event_dict['EventData'][tag] = val
+        b = bunch.Bunch()
+        b.SourceName = event_dict['SourceName']
+
+        b.StringInserts = tuple(stringInserts)
+        b.EventID = event_dict['Id']
+        event_dict['data'] = stringInserts
         description = expandString(b)
         event_dict['Description'] = description
         if description:
@@ -252,6 +250,7 @@ def readeventsXML(path):
             first_line = description.split("\r\n")[0]
             event_dict['Short Description'] = first_line
         yield event_dict
+
 
 def description_to_fields(description):
     event_dict = {}
@@ -315,9 +314,9 @@ def main():
                         help='Directory with additoinal DLLs to load (as created by dllraider)')
     parser.add_argument('--debug', "-d", action="store_true",
                         help='Debug level messages')
-    parser.add_argument('--mode',help="Parsing mode: xml or native",choices=["xml","native"],
+    parser.add_argument('--mode', help="Parsing mode: xml or native", choices=["xml", "native"],
                         default="native")
-    
+
     args = parser.parse_args()
 
     if args.debug:
@@ -331,11 +330,12 @@ def main():
     all_logs = [item for sublist in [
         glob.glob(k) for k in args.logfiles] for item in sublist]
 
-    if args.mode=="native":
-        parsefunc=readevents
-    elif args.mode=="xml":
-        parsefunc=readeventsXML
+    if args.mode == "native":
+        parsefunc = readevents
+    elif args.mode == "xml":
+        parsefunc = readeventsXML
 
+    counter=0
     for lf in all_logs:
         LOGGER.info("Processing {}".format(lf))
         try:
@@ -344,9 +344,11 @@ def main():
                 if args.format == "json":
                     txt = json.dumps(record)
                     output.write(txt+"\n")
-                    LOGGER.debug(txt)
+                    LOGGER.debug(txt)        
         except pywintypes.error as e:
             LOGGER.error(str(e))
+        counter+=1
+    LOGGER.info(f"Processed {counter} out of {len(all_logs)} files")
 
 
 if __name__ == '__main__':

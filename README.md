@@ -53,7 +53,7 @@ stdin{
 }
 filter {
         date {
-                match => [ "TimeGenerated" , "EEE, MMMM d, YYYY H:m:s" ]
+                match => [ "TimeGenerated" , "ISO8601", "EEE, MMMM d, YYYY H:m:s" ]
         }
 }
 output {
