@@ -13,8 +13,35 @@
 # Konrads' Pen-Ultimate (Windows) Log File Parser
 
 This small utility parses saved Windows EVTX files using Windows native routines and outputs JSON-ND.
-In a sense it is similar to tzworks' evtwalker and elmo combination. It is much faster than python-evtx as it uses Windows native code.
+In a sense it is similar to tzworks' evtwalker and elmo combination.It is much faster than python-evtx as it can use either:
+
+* Windows native code (OpenBackupEventLog) using --mode native; or 
+* XML using pyevtx-rs --mode xml.
+
 *Requires pywin32, windows only.*
+
+```
+>py kpulp.py --help
+usage: kpulp.py [-h] [--output OUTPUT] [--output-format {json}] [--additional-dlls EXTRADLLPATH] [--debug]
+                [--mode {xml,native}]
+                LOGFILE.evtx [LOGFILE.evtx ...]
+
+Parse EVTX files
+
+positional arguments:
+  LOGFILE.evtx          List of logfiles to parse. Will expand wildcards.
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --output OUTPUT, -o OUTPUT
+                        Destination, if - then STDOUT (default)
+  --output-format {json}, -f {json}
+                        Output format, choices are:json
+  --additional-dlls EXTRADLLPATH
+                        Directory with additoinal DLLs to load (as created by dllraider)
+  --debug, -d           Debug level messages
+  --mode {xml,native}   Parsing mode: xml or native
+```
 
 The main redeeming feature is parsing of log text narrative into fields, e.g. 
 ```
