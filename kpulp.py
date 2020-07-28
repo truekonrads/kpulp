@@ -345,7 +345,7 @@ def main():
                     txt = json.dumps(record)
                     output.write(txt+"\n")
                     LOGGER.debug(txt)        
-        except pywintypes.error as e:
+        except (pywintypes.error,RuntimeError) as e:
             LOGGER.error(str(e))
         counter+=1
     LOGGER.info(f"Processed {counter} out of {len(all_logs)} files")
