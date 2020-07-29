@@ -196,10 +196,21 @@ def readevents(path):
 def readeventsXML(path):
     parser = evtx.PyEvtxParser(path)
     for event in parser:
+        datefmts=[
+            "%Y-%m-%d %H:%M:%S.%f %Z",
+            "%Y-%m-%d %H:%M:%S %Z"]
+        for df in datefmts:
+            try:
+                d=datetime.strptime(
+                    event['timestamp'], df).isoformat()
+            except ValueError:
+                continue
+            break
+        else:
+            LOGGER.error(f"Unable to parse date '{event['timestamp']}'")
         event_dict = {
-            'TimeGenerated':
-            datetime.strptime(
-                event['timestamp'], "%Y-%m-%d %H:%M:%S.%f %Z").isoformat()
+            'TimeGenerated':d 
+            
         }
         ns = {'e': 'http://schemas.microsoft.com/win/2004/08/events/event'}
         et = etree.fromstring(event['data'].encode('utf8'))
@@ -347,6 +358,7 @@ def main():
                     LOGGER.debug(txt)        
         except (pywintypes.error,RuntimeError) as e:
             LOGGER.error(str(e))
+            
         counter+=1
     LOGGER.info(f"Processed {counter} out of {len(all_logs)} files")
 
