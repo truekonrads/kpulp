@@ -3,3 +3,4 @@ pyevtx-rs
 pywin32
 lxml
 tzlocal 
+pytz

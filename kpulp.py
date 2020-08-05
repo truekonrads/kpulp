@@ -16,6 +16,7 @@ from datetime import datetime
 from lxml import etree
 import tzlocal
 import pytz
+from bs4 import BeautifulSoup
 OUTPUT_FORMATS = "json".split(" ")
 LANGID = win32api.MAKELANGID(win32con.LANG_NEUTRAL, win32con.SUBLANG_NEUTRAL)
 DLLCACHE = {}
@@ -195,7 +196,7 @@ def readevents(path):
 
 def readeventsXML(path):
     parser = evtx.PyEvtxParser(path)
-    for event in parser:
+    for enventOrder,event in enumerate(parser):
         datefmts=[
             "%Y-%m-%d %H:%M:%S.%f %Z",
             "%Y-%m-%d %H:%M:%S %Z"]
@@ -213,19 +214,44 @@ def readeventsXML(path):
             
         }
         ns = {'e': 'http://schemas.microsoft.com/win/2004/08/events/event'}
-        et = etree.fromstring(event['data'].encode('utf8'))
-        system = et.find("e:System", ns)
-        event_dict['SourceName'] = system.find("e:Provider", ns).attrib['Name']
-        event_dict['Id'] = int(system.find("e:EventID", ns).text)
-        event_dict['EventType'] = system.find("e:Level", ns).text
-        event_dict['ComputerName'] = system.find("e:Computer", ns).text
         stringInserts = []
-        eventdata = et.find("e:EventData", ns)
         event_dict['EventData'] = {}
+        try:
+            parser="lxml"
+            et = etree.fromstring(event['data']
+                            .encode('utf8')
+            )
+            system = et.find("e:System", ns)
+            event_dict['SourceName'] = system.find("e:Provider", ns).attrib['Name']
+            event_dict['Id'] = int(system.find("e:EventID", ns).text)
+            event_dict['EventType'] = system.find("e:Level", ns).text
+            event_dict['ComputerName'] = system.find("e:Computer", ns).text            
+            eventdata = et.find("e:EventData", ns)
+
+        except etree.XMLSyntaxError as e:
+            LOGGER.warning(f"{path}:{enventOrder} is damaged, using BeautifulSoup4")
+            LOGGER.debug(event['data'])
+            parser="bs"
+            et=BeautifulSoup(event['data'],"xml")
+            system = et.find("System")
+            event_dict['SourceName'] = system.find("Provider")['Name']
+            event_dict['Id'] = int(system.find("EventID").text)
+            event_dict['EventType'] = system.find("Level").text
+            event_dict['ComputerName'] = system.find("Computer").text            
+            eventdata = et.find("EventData")
+        
         if eventdata is not None:
-            for elem in eventdata.findall("e:Data", ns):
+            if parser=="lxml":
+                it= eventdata.findall("e:Data", ns)
+            else:
+                it = eventdata.findAll("Data")
+
+            for elem in it:
                 try:
-                    k = elem.attrib['Name']
+                    if parser=="lxml":
+                        k = elem.attrib['Name']
+                    else:
+                        k = elem['Name']
                 except KeyError:
                     # print(event['data'])
                     k = 'Data'
@@ -254,7 +280,10 @@ def readeventsXML(path):
         b.StringInserts = tuple(stringInserts)
         b.EventID = event_dict['Id']
         event_dict['data'] = stringInserts
-        description = expandString(b)
+        try:
+            description = expandString(b)
+        except SystemError as e:
+            LOGGER.warning(str(e))
         event_dict['Description'] = description
         if description:
             event_dict.update(description_to_fields(description))
