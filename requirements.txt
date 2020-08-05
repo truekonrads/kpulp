@@ -1,5 +1,5 @@
 bunch
-pyevtx-rs
+evtx
 pywin32
 lxml
 tzlocal 
