@@ -195,101 +195,112 @@ def readevents(path):
 
 
 def readeventsXML(path):
-    parser = evtx.PyEvtxParser(path)
-    for enventOrder,event in enumerate(parser):
-        datefmts=[
-            "%Y-%m-%d %H:%M:%S.%f %Z",
-            "%Y-%m-%d %H:%M:%S %Z"]
-        for df in datefmts:
-            try:
-                d=datetime.strptime(
-                    event['timestamp'], df).isoformat()
-            except ValueError:
-                continue
-            break
-        else:
-            LOGGER.error(f"Unable to parse date '{event['timestamp']}'")
-        event_dict = {
-            'TimeGenerated':d 
-            
-        }
-        ns = {'e': 'http://schemas.microsoft.com/win/2004/08/events/event'}
-        stringInserts = []
-        event_dict['EventData'] = {}
-        try:
-            parser="lxml"
-            et = etree.fromstring(event['data']
-                            .encode('utf8')
-            )
-            system = et.find("e:System", ns)
-            event_dict['SourceName'] = system.find("e:Provider", ns).attrib['Name']
-            event_dict['Id'] = int(system.find("e:EventID", ns).text)
-            event_dict['EventType'] = system.find("e:Level", ns).text
-            event_dict['ComputerName'] = system.find("e:Computer", ns).text            
-            eventdata = et.find("e:EventData", ns)
-
-        except etree.XMLSyntaxError as e:
-            LOGGER.warning(f"{path}:{enventOrder} is damaged, using BeautifulSoup4")
-            LOGGER.debug(event['data'])
-            parser="bs"
-            et=BeautifulSoup(event['data'],"xml")
-            system = et.find("System")
-            event_dict['SourceName'] = system.find("Provider")['Name']
-            event_dict['Id'] = int(system.find("EventID").text)
-            event_dict['EventType'] = system.find("Level").text
-            event_dict['ComputerName'] = system.find("Computer").text            
-            eventdata = et.find("EventData")
-        
-        if eventdata is not None:
-            if parser=="lxml":
-                it= eventdata.findall("e:Data", ns)
-            else:
-                it = eventdata.findAll("Data")
-
-            for elem in it:
+    try:
+        parser = evtx.PyEvtxParser(path)
+        for enventOrder,event in enumerate(parser):
+            datefmts=[
+                "%Y-%m-%d %H:%M:%S.%f %Z",
+                "%Y-%m-%d %H:%M:%S %Z"]
+            for df in datefmts:
                 try:
-                    if parser=="lxml":
-                        k = elem.attrib['Name']
-                    else:
-                        k = elem['Name']
-                except KeyError:
-                    # print(event['data'])
-                    k = 'Data'
-                    # An anomalous message, we're probably not handling it well
-                    #raise Exception("Eeek!")
-                v = elem.text
-                if v is None:
-                    v = ''
-                stringInserts.append(v)
-                event_dict['EventData'][k] = v
-        else:  # Handle UserData and such
-            # See https://eventlogxp.com/blog/the-fastest-way-to-filter-events-by-description/
-            eventdata = et[1]
-            for e in eventdata.iter():
-                if len(e.getchildren()) == 0:
-                    tag = e.tag.split("}")[1]
-                    if e.text is None:
-                        val = ''
-                    else:
-                        val = e.text
-                    stringInserts.append(val)
-                    event_dict['EventData'][tag] = val
-        b = bunch.Bunch()
-        b.SourceName = event_dict['SourceName']
+                    d=datetime.strptime(
+                        event['timestamp'], df).isoformat()
+                except ValueError:
+                    continue
+                break
+            else:
+                LOGGER.error(f"Unable to parse date '{event['timestamp']}'")
+            event_dict = {
+                'TimeGenerated':d 
+                
+            }
+            ns = {'e': 'http://schemas.microsoft.com/win/2004/08/events/event'}
+            stringInserts = []
+            event_dict['EventData'] = {}
+            try:
+                parser="lxml"
+                et = etree.fromstring(event['data']
+                                .encode('utf8')
+                )
+                system = et.find("e:System", ns)
+                event_dict['SourceName'] = system.find("e:Provider", ns).attrib['Name']
+                event_dict['Id'] = int(system.find("e:EventID", ns).text)
+                event_dict['EventType'] = system.find("e:Level", ns).text
+                event_dict['ComputerName'] = system.find("e:Computer", ns).text            
+                eventdata = et.find("e:EventData", ns)
 
-        b.StringInserts = tuple(stringInserts)
-        b.EventID = event_dict['Id']
-        event_dict['data'] = stringInserts
-        try:
-            description = expandString(b)
-        except SystemError as e:
-            LOGGER.warning(str(e))
-        event_dict['Description'] = description
-        if description:
-            event_dict.update(description_to_fields(description))
-            first_line = description.split("\r\n")[0]
-            event_dict['Short Description'] = first_line
-        yield event_dict
+            except (KeyError,etree.XMLSyntaxError) as e:
+                LOGGER.warning(f"{path}:{enventOrder} is damaged, using BeautifulSoup4")
+                LOGGER.debug(event['data'])
+                try:
+                    parser="bs"
+                    et=BeautifulSoup(event['data'],"xml")
+                    system = et.find("System")
+                    event_dict['SourceName'] = system.find("Provider")['Name']
+                    event_dict['Id'] = int(system.find("EventID").text)
+                    event_dict['EventType'] = system.find("Level").text
+                    event_dict['ComputerName'] = system.find("Computer").text            
+                    eventdata = et.find("EventData")
+                except (KeyError,AttributeError) as e:
+                    LOGGER.error(f"Parsing using {parser} failed too {e}: {event}")
+                    continue
+            if eventdata is not None:
+                if parser=="lxml":
+                    it= eventdata.findall("e:Data", ns)
+                else:
+                    it = eventdata.findAll("Data")
+
+                for elem in it:
+                    try:
+                        if parser=="lxml":
+                            k = elem.attrib['Name']
+                        else:
+                            k = elem['Name']
+                    except KeyError:
+                        # print(event['data'])
+                        k = 'Data'
+                        # An anomalous message, we're probably not handling it well
+                        #raise Exception("Eeek!")
+                    v = elem.text
+                    if v is None:
+                        v = ''
+                    stringInserts.append(v)
+                    event_dict['EventData'][k] = v
+            else:  # Handle UserData and such
+                # See https://eventlogxp.com/blog/the-fastest-way-to-filter-events-by-description/
+                try:
+                    eventdata = et[1]
+                except (KeyError,IndexError) as e:
+                    
+                    LOGGER.error(f"Unable to parse event data: {e} {et}")
+                    continue
+                for e in eventdata.iter():
+                    if len(e.getchildren()) == 0:
+                        tag = e.tag.split("}")[1]
+                        if e.text is None:
+                            val = ''
+                        else:
+                            val = e.text
+                        stringInserts.append(val)
+                        event_dict['EventData'][tag] = val
+            b = bunch.Bunch()
+            b.SourceName = event_dict['SourceName']
+
+            b.StringInserts = tuple(stringInserts)
+            b.EventID = event_dict['Id']
+            event_dict['data'] = stringInserts
+            try:
+                description = expandString(b)
+            except SystemError as e:
+                LOGGER.warning(str(e))
+            event_dict['Description'] = description
+            if description:
+                event_dict.update(description_to_fields(description))
+                first_line = description.split("\r\n")[0]
+                event_dict['Short Description'] = first_line
+            yield event_dict
+    except RuntimeError as e:
+        LOGGER.error(str(e))
 
 
 def description_to_fields(description):

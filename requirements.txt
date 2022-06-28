@@ -1,6 +1,0 @@
-bunch
-evtx
-pywin32
-lxml
-tzlocal 
-pytz
