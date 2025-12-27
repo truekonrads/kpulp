@@ -1,3 +1,5 @@
+_While this code probably works it is not maintained and you should seitch to the [evtx tool](https://github.com/omerbenamram/evtx)._
+
 ```
 
 
